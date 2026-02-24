@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"log"
@@ -8,6 +9,10 @@ import (
 	"os"
 	"strconv"
 	"sync"
+
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,36 +41,36 @@ var (
 
 // The init function runs automatically when the program starts.
 func init() {
-	// 打开 CSV 文件
+	// open csv file
 	file, err := os.Open("./assets/bank_customers.csv")
 	if err != nil {
-		// 如果找不到文件，打印警告但不崩溃，数据库保持为空
+		// print error if the file cannot be opened, but don't crash the program. Instead, we can start with an empty database.
 		log.Println("⚠️ Warning: Could not open bank_customers.csv. Starting with an empty database.")
 		return
 	}
-	defer file.Close() // 记得在函数结束时关闭文件
+	defer file.Close() // close file
 
-	// 创建 CSV 读取器
+	// create csv reader
 	reader := csv.NewReader(file)
 
-	// 读取所有行
+	// read all records from the csv file
 	records, err := reader.ReadAll()
 	if err != nil {
 		log.Fatal("Error reading CSV file:", err)
 	}
 
-	// 遍历每一行数据
+	// retrieve data from csv and store it in the customerStore map
 	for i, row := range records {
 		if i == 0 {
-			continue // 跳过第一行的表头 (Header)
+			continue // skip the header row
 		}
 
-		// 将字符串格式的 Age 转换为 int
+		// convert the string format of Age to an integer
 		age, _ := strconv.Atoi(row[2])
-		// 将字符串格式的 Balance 转换为 float64
+		// convert the string format of AccountBalance to a float
 		balance, _ := strconv.ParseFloat(row[8], 64)
 
-		// 将这一行的数据组装成一个 Customer 对象
+		// convert the csv row into a Customer struct
 		customer := Customer{
 			ID:               row[0],
 			Name:             row[1],
@@ -79,11 +84,11 @@ func init() {
 			RegistrationDate: row[9],
 		}
 
-		// 存入我们的内存数据库
+		// save the customer into the key-value store
 		customerStore[customer.ID] = customer
 	}
 
-	// 启动时在终端打印加载了多少条数据
+	// print the number of customers loaded from the CSV file
 	fmt.Printf("✅ Successfully loaded %d customers from CSV!\n", len(customerStore))
 }
 
@@ -189,6 +194,25 @@ func deleteCustomerByID(c *gin.Context) {
 }
 
 func main() {
+	// Use the SetServerAPIOptions() method to set the version of the Stable API on the client
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	opts := options.Client().ApplyURI("mongodb+srv://tyleryuelinwen_db_user:S7nRcnG5MtnVCPlz@cluster0.5f59h5a.mongodb.net/?appName=Cluster0").SetServerAPIOptions(serverAPI)
+	// Create a new client and connect to the server
+	client, err := mongo.Connect(opts)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err = client.Disconnect(context.TODO()); err != nil {
+			panic(err)
+		}
+	}()
+	// Send a ping to confirm a successful connection
+	if err := client.Ping(context.TODO(), readpref.Primary()); err != nil {
+		panic(err)
+	}
+	fmt.Println("Pinged your deployment. You successfully connected to MongoDB!")
+
 	router := gin.Default()
 
 	// Register routes
