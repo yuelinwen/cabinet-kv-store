@@ -1,126 +1,128 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-	"sync"
 
 	"github.com/yuelinwen/cabinet-kv-store/server/database"
 	"github.com/yuelinwen/cabinet-kv-store/server/models"
 
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
-// We use a Map as our local Key-Value Store.
-// The Key is the customer ID, and the Value is the customer information.
-// In Go, the built-in make function is used to create and initialize only three types of built-in data structures: slices, maps, and channels.
-var (
-	customerStore = make(map[string]models.Customer)
-	storeMutex    sync.RWMutex // Read-Write mutex to ensure concurrency safety
-)
-
-// InitStore calls the database package to load CSV dummy data into our local map.
-func InitStore() {
-	database.LoadCSVToMemory(customerStore)
-}
-
-// GetCustomers returns a list of all customers.
+// GetCustomers returns a list of all customers directly from MongoDB.
 func GetCustomers(c *gin.Context) {
-	storeMutex.RLock() // Acquire read lock
-	defer storeMutex.RUnlock()
-
-	// Convert the map to a slice to return it as a JSON array
 	var customers []models.Customer
-	for _, customer := range customerStore {
-		customers = append(customers, customer)
+
+	// Pass an empty bson.M{} to find all documents
+	cursor, err := database.CustomerCollection.Find(context.TODO(), bson.M{})
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch customers"})
+		return
 	}
+	defer cursor.Close(context.TODO())
+
+	// Decode all documents into the customers slice
+	if err = cursor.All(context.TODO(), &customers); err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode customers"})
+		return
+	}
+
+	if customers == nil {
+		customers = []models.Customer{} // Return empty array instead of null if no data
+	}
+
 	c.IndentedJSON(http.StatusOK, customers)
 }
 
-// PostCustomer adds a new customer (corresponds to the PUT/write operation in your project).
+// PostCustomer adds a new customer into MongoDB.
 func PostCustomer(c *gin.Context) {
 	var newCustomer models.Customer
 
-	// Bind the JSON data received from the request body
 	if err := c.BindJSON(&newCustomer); err != nil {
 		fmt.Println("Error binding JSON:", err)
 		c.IndentedJSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
 
-	storeMutex.Lock() // Acquire write lock
-	defer storeMutex.Unlock()
-
-	// Check if the customer ID already exists
-	if _, exists := customerStore[newCustomer.ID]; exists {
-		c.IndentedJSON(http.StatusConflict, gin.H{"error": "Customer ID already exists"})
+	// Insert into MongoDB
+	_, err := database.CustomerCollection.InsertOne(context.TODO(), newCustomer)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			c.IndentedJSON(http.StatusConflict, gin.H{"error": "Customer ID already exists"})
+			return
+		}
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert customer"})
 		return
 	}
 
-	// Save the new customer into the key-value store
-	customerStore[newCustomer.ID] = newCustomer
 	c.IndentedJSON(http.StatusCreated, newCustomer)
 }
 
-// GetCustomerByID retrieves a specific customer by ID (corresponds to the GET operation).
+// GetCustomerByID retrieves a specific customer by ID from MongoDB.
 func GetCustomerByID(c *gin.Context) {
 	id := c.Param("id")
+	var customer models.Customer
 
-	storeMutex.RLock() // Acquire read lock
-	customer, exists := customerStore[id]
-	storeMutex.RUnlock()
-
-	if exists {
-		c.IndentedJSON(http.StatusOK, customer)
+	// Find the document where "_id" matches the provided ID
+	err := database.CustomerCollection.FindOne(context.TODO(), bson.M{"_id": id}).Decode(&customer)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.IndentedJSON(http.StatusNotFound, gin.H{"message": "customer not found"})
+			return
+		}
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
 	}
 
-	c.IndentedJSON(http.StatusNotFound, gin.H{"message": "customer not found"})
+	c.IndentedJSON(http.StatusOK, customer)
 }
 
-// PutCustomerByID updates an existing customer's information (corresponds to the PUT operation).
+// PutCustomerByID completely replaces an existing customer's data in MongoDB.
 func PutCustomerByID(c *gin.Context) {
 	id := c.Param("id")
 	var updatedCustomer models.Customer
 
-	// Bind the JSON data received from the request body
 	if err := c.BindJSON(&updatedCustomer); err != nil {
 		fmt.Println("Error binding JSON:", err)
 		c.IndentedJSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
-
-	// Ensure the ID in the payload matches the ID in the URL
 	updatedCustomer.ID = id
 
-	storeMutex.Lock() // Acquire write lock
-	defer storeMutex.Unlock()
+	// Replace the document in MongoDB
+	result, err := database.CustomerCollection.ReplaceOne(context.TODO(), bson.M{"_id": id}, updatedCustomer)
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to update customer"})
+		return
+	}
 
-	// Check if the customer exists before updating
-	if _, exists := customerStore[id]; !exists {
+	if result.MatchedCount == 0 {
 		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "customer not found"})
 		return
 	}
 
-	// Update the customer in the key-value store
-	customerStore[id] = updatedCustomer
 	c.IndentedJSON(http.StatusOK, updatedCustomer)
 }
 
-// DeleteCustomerByID removes a customer by ID (corresponds to the DELETE operation).
+// DeleteCustomerByID removes a customer from MongoDB.
 func DeleteCustomerByID(c *gin.Context) {
 	id := c.Param("id")
 
-	storeMutex.Lock() // Acquire write lock
-	_, exists := customerStore[id]
-	if exists {
-		delete(customerStore, id) // Delete this key from the map
+	// Delete from MongoDB
+	result, err := database.CustomerCollection.DeleteOne(context.TODO(), bson.M{"_id": id})
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete customer"})
+		return
 	}
-	storeMutex.Unlock()
 
-	if exists {
-		c.IndentedJSON(http.StatusOK, gin.H{"message": "customer deleted successfully"})
-	} else {
+	if result.DeletedCount == 0 {
 		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "customer not found"})
+		return
 	}
+
+	c.IndentedJSON(http.StatusOK, gin.H{"message": "customer deleted successfully"})
 }

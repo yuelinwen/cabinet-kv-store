@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	// Connect to MongoDB Atlas
+	// 1. Connect to MongoDB Atlas
 	database.ConnectMongoDB()
 	defer func() {
 		if err := database.MongoClient.Disconnect(context.TODO()); err != nil {
@@ -18,22 +18,17 @@ func main() {
 		}
 	}()
 
-	// Load dummy data from CSV into our local Map store
-	controllers.InitStore()
+	// 2. Automatically seed data to MongoDB if it is empty!
+	database.SeedDatabaseFromCSV()
 
-	// Initialize Gin router
+	// 3. Initialize Gin router
 	router := gin.Default()
 
 	// Register routes
-	// return a list of all customers
 	router.GET("/customers", controllers.GetCustomers)
-	// get customer by ID
 	router.GET("/customers/:id", controllers.GetCustomerByID)
-	// add a new customer
 	router.POST("/customers", controllers.PostCustomer)
-	// update an existing customer by ID
 	router.PUT("/customers/:id", controllers.PutCustomerByID)
-	// delete a customer by ID
 	router.DELETE("/customers/:id", controllers.DeleteCustomerByID)
 
 	// Start the server
