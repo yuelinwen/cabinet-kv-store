@@ -56,7 +56,7 @@ func SeedDatabaseFromCSV() {
 	fmt.Println("⏳ MongoDB is empty. Importing data from CSV...")
 
 	// 2. Open and read CSV
-	file, err := os.Open("./assets/bank_customers.csv")
+	file, err := os.Open("./assets/bank_customers10.csv")
 	if err != nil {
 		log.Println("⚠️ Warning: Could not open CSV file. Database remains empty.")
 		return
