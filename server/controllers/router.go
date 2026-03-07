@@ -15,26 +15,31 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
+// getCollection retrieves the MongoDB collection for the node that received this request.
+// main.go injects "nodeID" into every gin context via middleware.
+func getCollection(c *gin.Context) *mongo.Collection {
+	nodeID, _ := c.Get("nodeID")
+	return database.GetCollection(nodeID.(int))
+}
+
 // GET ALL: GetCustomers returns a list of all customers directly from MongoDB.
 func GetCustomers(c *gin.Context) {
 	var customers []models.Customer
 
-	// Pass an empty bson.M{} to find all documents
-	cursor, err := database.CustomerCollection.Find(context.TODO(), bson.M{})
+	cursor, err := getCollection(c).Find(context.TODO(), bson.M{})
 	if err != nil {
 		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch customers"})
 		return
 	}
 	defer cursor.Close(context.TODO())
 
-	// Decode all documents into the customers slice
 	if err = cursor.All(context.TODO(), &customers); err != nil {
 		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode customers"})
 		return
 	}
 
 	if customers == nil {
-		customers = []models.Customer{} // Return empty array instead of null if no data
+		customers = []models.Customer{}
 	}
 
 	c.IndentedJSON(http.StatusOK, customers)
@@ -45,8 +50,7 @@ func GetCustomerByID(c *gin.Context) {
 	id := c.Param("id")
 	var customer models.Customer
 
-	// Find the document where "_id" matches the provided ID
-	err := database.CustomerCollection.FindOne(context.TODO(), bson.M{"_id": id}).Decode(&customer)
+	err := getCollection(c).FindOne(context.TODO(), bson.M{"_id": id}).Decode(&customer)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			c.IndentedJSON(http.StatusNotFound, gin.H{"message": "customer not found"})
@@ -69,12 +73,11 @@ func PostCustomer(c *gin.Context) {
 		return
 	}
 
-	// Initialize account balance and registration date, and generate a unique ID for the new customer
 	newCustomer.ID = uuid.New().String()
 	newCustomer.AccountBalance = 0.0
 	newCustomer.RegistrationDate = time.Now().Format(time.DateOnly)
 
-	_, err := database.CustomerCollection.InsertOne(context.TODO(), newCustomer)
+	_, err := getCollection(c).InsertOne(context.TODO(), newCustomer)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			c.IndentedJSON(http.StatusConflict, gin.H{"error": "Customer ID already exists"})
@@ -99,8 +102,7 @@ func PutCustomerByID(c *gin.Context) {
 	}
 	updatedCustomer.ID = id
 
-	// Replace the document in MongoDB
-	result, err := database.CustomerCollection.ReplaceOne(context.TODO(), bson.M{"_id": id}, updatedCustomer)
+	result, err := getCollection(c).ReplaceOne(context.TODO(), bson.M{"_id": id}, updatedCustomer)
 	if err != nil {
 		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to update customer"})
 		return
@@ -118,8 +120,7 @@ func PutCustomerByID(c *gin.Context) {
 func DeleteCustomerByID(c *gin.Context) {
 	id := c.Param("id")
 
-	// Delete from MongoDB
-	result, err := database.CustomerCollection.DeleteOne(context.TODO(), bson.M{"_id": id})
+	result, err := getCollection(c).DeleteOne(context.TODO(), bson.M{"_id": id})
 	if err != nil {
 		c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete customer"})
 		return
