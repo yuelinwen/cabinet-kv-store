@@ -27,10 +27,10 @@ const (
 // currentLeaderID is the node the gateway currently routes requests to.
 var currentLeaderID atomic.Int32
 
-// proxyRequest forwards the request to the current leader.
-// If that node is unreachable it walks through all nodes until one responds.
+// proxyRequest forwards the request to any live node.
+// It fires requests to all nodes concurrently and uses the first successful response.
+// If all nodes are unreachable it retries every 500ms until a 30-second deadline.
 func proxyRequest(w http.ResponseWriter, r *http.Request) {
-	// Buffer body so we can retry on a different node if needed.
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -38,49 +38,76 @@ func proxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	client := &http.Client{Timeout: 3 * time.Second}
-	startLeader := int(currentLeaderID.Load())
-
-	for i := 0; i < NumNodes; i++ {
-		nodeID := (startLeader + i) % NumNodes
-		target := fmt.Sprintf("http://localhost:%d%s", InternalBasePort+nodeID, r.URL.RequestURI())
-
-		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(bodyBytes))
-		if err != nil {
-			continue
-		}
-		// Copy original headers (Content-Type etc.)
-		for k, v := range r.Header {
-			req.Header[k] = v
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			// This node is unreachable — advance the leader pointer and try next
-			fmt.Printf("[Gateway] Node %d unreachable (%v), trying next...\n", nodeID, err)
-			currentLeaderID.Store(int32((nodeID + 1) % NumNodes))
-			continue
-		}
-		defer resp.Body.Close()
-
-		// Successful — record this node as current leader and stream response back
-		currentLeaderID.Store(int32(nodeID))
-		for k, v := range resp.Header {
-			w.Header()[k] = v
-		}
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-		return
+	type nodeResult struct {
+		resp   *http.Response
+		nodeID int
 	}
 
-	http.Error(w, "503 Service Unavailable: all nodes unreachable", http.StatusServiceUnavailable)
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		ch := make(chan nodeResult, NumNodes)
+
+		// Fire requests to all nodes concurrently
+		for i := 0; i < NumNodes; i++ {
+			go func(id int) {
+				target := fmt.Sprintf("http://localhost:%d%s", InternalBasePort+id, r.URL.RequestURI())
+				client := &http.Client{Timeout: 2 * time.Second}
+				req, err := http.NewRequest(r.Method, target, bytes.NewReader(bodyBytes))
+				if err != nil {
+					ch <- nodeResult{nil, id}
+					return
+				}
+				for k, v := range r.Header {
+					req.Header[k] = v
+				}
+				resp, err := client.Do(req)
+				if err != nil {
+					ch <- nodeResult{nil, id}
+					return
+				}
+				ch <- nodeResult{resp, id}
+			}(i)
+		}
+
+		// Collect all results; use the first successful response
+		var winner nodeResult
+		for i := 0; i < NumNodes; i++ {
+			res := <-ch
+			if res.resp == nil {
+				continue
+			}
+			if winner.resp == nil {
+				winner = res // first success wins
+			} else {
+				res.resp.Body.Close() // discard extra responses
+			}
+		}
+
+		if winner.resp != nil {
+			currentLeaderID.Store(int32(winner.nodeID))
+			for k, v := range winner.resp.Header {
+				w.Header()[k] = v
+			}
+			w.WriteHeader(winner.resp.StatusCode)
+			io.Copy(w, winner.resp.Body)
+			winner.resp.Body.Close()
+			return
+		}
+
+		fmt.Printf("[Gateway] all nodes unreachable, retrying in 500ms...\n")
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	http.Error(w, "503 Service Unavailable: timed out waiting for any node", http.StatusServiceUnavailable)
 }
 
 // startGateway runs the single public-facing HTTP proxy on GatewayPort.
+// It opens port 8080 immediately; proxyRequest handles node unavailability internally.
 func startGateway() {
 	currentLeaderID.Store(int32(LeaderID))
-	fmt.Printf("[Gateway] listening on localhost:%d → internal nodes %d..%d (initial leader: node %d)\n",
-		GatewayPort, InternalBasePort, InternalBasePort+NumNodes-1, LeaderID)
+	fmt.Printf("[Gateway] listening on localhost:%d → internal nodes %d..%d\n",
+		GatewayPort, InternalBasePort, InternalBasePort+NumNodes-1)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", proxyRequest)
