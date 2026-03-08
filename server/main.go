@@ -37,9 +37,9 @@ var currentLeaderID atomic.Int32
 
 // ── Gateway ────────────────────────────────────────────────────────────────
 
-// proxyRequest dispatches to the right forwarding strategy:
-//   - POST/PUT/DELETE → current leader, with auto-discovery + one retry on failure
-//   - GET             → any live node (reads are served locally on each node)
+// proxyRequest dispatches all requests to the current leader.
+// Reads go to the leader for consistency (no stale reads from followers).
+// Writes also go to the leader so Cabinet consensus can be applied.
 func proxyRequest(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	r.Body.Close()
@@ -48,13 +48,7 @@ func proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
-		forwardWrite(w, r, bodyBytes)
-		return
-	}
-
-	// Reads: any live node (concurrent while loop)
-	sendToAnyNode(w, r, bodyBytes)
+	forwardWrite(w, r, bodyBytes)
 }
 
 // forwardWrite sends a write request to the node recorded in currentLeaderID.
