@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// EstablishRPCs dials the RPC port of every follower and stores connections in Conns.
+// EstablishRPCs dials the RPC port of every follower and stores connections in conns.
 // Adapted from cabinet/primary.go — config-file parsing replaced with direct port
 // arithmetic: follower i listens for RPC on localhost:(rpcBasePort+i).
 //
@@ -35,14 +35,14 @@ func EstablishRPCs(myServerID, numServers, rpcBasePort int) {
 
 		fmt.Printf("[Cabinet] connected to node %d\n", i)
 
-		Conns.Lock()
-		Conns.M[i] = &ServerDock{
-			ServerID: i,
-			Addr:     addr,
-			TxClient: txClient,
-			JobQMu:   sync.RWMutex{},
-			JobQ:     map[PrioClock]chan struct{}{},
+		conns.Lock()
+		conns.m[i] = &ServerDock{
+			serverID: i,
+			addr:     addr,
+			txClient: txClient,
+			jobQMu:   sync.RWMutex{},
+			jobQ:     map[int]chan struct{}{},
 		}
-		Conns.Unlock()
+		conns.Unlock()
 	}
 }

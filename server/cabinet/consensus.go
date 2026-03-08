@@ -7,25 +7,19 @@ import (
 	"github.com/yuelinwen/cabinet-kv-store/server/cabinet/smr"
 )
 
+const serviceMethod = "CabService.ConsensusService"
+
 // RunConsensus is the leader's Cabinet consensus loop.
 // Adapted from cabinet/consensus.go — TPCC/PlainMsg/eval/crash code removed.
 //
 // Each iteration of the outer for-loop is one Cabinet round (one pClock):
 //  1. Get each follower's weight for this round from pManager.
-//  2. Broadcast AppendEntries RPC to all followers concurrently.
+//  2. Broadcast ConsensusService RPC to all followers concurrently.
 //  3. Collect replies in arrival order into prioQueue (fastest first).
 //  4. Accumulate weights; stop when prioSum > majority (weighted quorum).
 //  5. Commit the command to the leader's own MongoDB.
 //  6. Re-rank follower weights based on reply order (prioQueue → pManager).
 //  7. leaderPClock++ → next round.
-//
-// Parameters:
-//   myPriority – leader's PriorityState (PrioVal + Majority)
-//   myState    – ServerState (leaderID for weight re-ranking)
-//   pManager   – PriorityManager (weight scheme per pClock)
-//   numServers – total cluster size (sizes the prioQueue channel)
-//   cmdCh      – write commands fed in by HTTP handlers (one per round)
-//   localExec  – applies the committed command to the leader's local MongoDB
 func RunConsensus(
 	myPriority *smr.PriorityState,
 	myState *smr.ServerState,
@@ -38,7 +32,7 @@ func RunConsensus(
 
 	for cmd := range cmdCh { // each iteration = one Cabinet round
 		receiver := make(chan ReplyInfo, numServers)
-		prioQueue := make(chan ServerID, numServers)
+		prioQueue := make(chan int, numServers)
 
 		// 1. Get each follower's weight for this pClock
 		fpriorities := pManager.GetFollowerPriorities(leaderPClock)
@@ -46,18 +40,18 @@ func RunConsensus(
 			leaderPClock, cmd.Op, cmd.Key, myPriority.Majority)
 
 		// 2. Broadcast ConsensusService RPC to all followers concurrently
-		Conns.RLock()
-		for _, conn := range Conns.M {
+		conns.RLock()
+		for _, conn := range conns.m {
 			args := &Args{
 				PrioClock: leaderPClock,
-				PrioVal:   fpriorities[conn.ServerID],
+				PrioVal:   fpriorities[conn.serverID],
 				Op:        cmd.Op,
 				Key:       cmd.Key,
 				ValueJSON: cmd.ValueJSON,
 			}
-			go executeRPC(conn, args, receiver)
+			go executeRPC(conn, serviceMethod, args, receiver)
 		}
-		Conns.RUnlock()
+		conns.RUnlock()
 
 		// 3 & 4. Accumulate weights; first node to push prioSum over majority wins
 		prioSum := myPriority.PrioVal // leader counts its own weight immediately
@@ -112,39 +106,38 @@ func RunConsensus(
 	}
 }
 
-// executeRPC sends one ConsensusService RPC to a single follower.
-// Adapted from cabinet/consensus.go:executeRPC.
+// executeRPC sends one RPC to a single follower.
+// Restored from cabinet/consensus.go — serviceMethod is passed as a parameter.
 //
 // The jobQ enforces ordered delivery per follower: round N's RPC waits for
 // round N-1 to complete on the same TCP connection before being sent.
-// This prevents out-of-order execution on the follower.
-func executeRPC(conn *ServerDock, args *Args, receiver chan ReplyInfo) {
+func executeRPC(conn *ServerDock, serviceMethod string, args *Args, receiver chan ReplyInfo) {
 	stack := make(chan struct{}, 1)
 
-	conn.JobQMu.Lock()
-	conn.JobQ[args.PrioClock] = stack
-	conn.JobQMu.Unlock()
+	conn.jobQMu.Lock()
+	conn.jobQ[args.PrioClock] = stack
+	conn.jobQMu.Unlock()
 
 	// Wait for previous round's RPC to complete on this follower
 	if args.PrioClock > 0 {
-		conn.JobQMu.RLock()
-		prev := conn.JobQ[args.PrioClock-1]
-		conn.JobQMu.RUnlock()
+		conn.jobQMu.RLock()
+		prev := conn.jobQ[args.PrioClock-1]
+		conn.jobQMu.RUnlock()
 		<-prev
 	}
 
 	reply := Reply{}
-	err := conn.TxClient.Call("CabService.ConsensusService", args, &reply)
+	err := conn.txClient.Call(serviceMethod, args, &reply)
 
 	// Always signal the next round it can proceed (even on failure)
-	conn.JobQMu.Lock()
-	conn.JobQ[args.PrioClock] <- struct{}{}
-	conn.JobQMu.Unlock()
+	conn.jobQMu.Lock()
+	conn.jobQ[args.PrioClock] <- struct{}{}
+	conn.jobQMu.Unlock()
 
 	if err != nil {
-		fmt.Printf("[Cabinet] RPC to node %d failed: %v\n", conn.ServerID, err)
+		fmt.Printf("[Cabinet] RPC to node %d failed: %v\n", conn.serverID, err)
 		return
 	}
 
-	receiver <- ReplyInfo{SID: conn.ServerID, PClock: args.PrioClock, Recv: reply}
+	receiver <- ReplyInfo{SID: conn.serverID, PClock: args.PrioClock, Recv: reply}
 }
