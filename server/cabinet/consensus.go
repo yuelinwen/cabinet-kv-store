@@ -18,8 +18,9 @@ const serviceMethod = "CabService.ConsensusService"
 //  3. Collect replies in arrival order into prioQueue (fastest first).
 //  4. Accumulate weights; stop when prioSum > majority (weighted quorum).
 //  5. Commit the command to the leader's own MongoDB.
-//  6. Re-rank follower weights based on reply order (prioQueue → pManager).
-//  7. leaderPClock++ → next round.
+//  6. Drain late replies (200ms window) so all responders enter prioQueue.
+//  7. Re-rank follower weights based on reply order (prioQueue → pManager).
+//  8. leaderPClock++ → next round.
 func RunConsensus(
 	myPriority *smr.PriorityState,
 	myState *smr.ServerState,
@@ -98,7 +99,25 @@ func RunConsensus(
 			cmd.ReplyCh <- execErr
 		}
 
-		// 6. Re-rank follower weights based on reply order this round
+		// 6. Drain late replies from receiver into prioQueue.
+		// After waitLoop breaks (quorum or timeout), RPC goroutines that haven't
+		// replied yet are still running. Give them a short window to finish so
+		// their arrival order is captured for the next round's weight ranking.
+		// We do this after notifying the HTTP handler to avoid adding latency.
+		drainDeadline := time.After(200 * time.Millisecond)
+	drainLoop:
+		for {
+			select {
+			case rinfo := <-receiver:
+				prioQueue <- rinfo.SID
+				fmt.Printf("[Cabinet] pClock=%d node=%d late reply (still ranked)\n",
+					leaderPClock, rinfo.SID)
+			case <-drainDeadline:
+				break drainLoop
+			}
+		}
+
+		// 7. Re-rank follower weights based on reply order this round
 		leaderPClock++
 		if err := pManager.UpdateFollowerPriorities(leaderPClock, prioQueue, myState.GetLeaderID()); err != nil {
 			fmt.Printf("[Cabinet] UpdateFollowerPriorities failed: %v\n", err)

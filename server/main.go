@@ -38,7 +38,7 @@ var currentLeaderID atomic.Int32
 // ── Gateway ────────────────────────────────────────────────────────────────
 
 // proxyRequest dispatches to the right forwarding strategy:
-//   - POST/PUT/DELETE → leader only (writes must go through Cabinet consensus)
+//   - POST/PUT/DELETE → current leader, with auto-discovery + one retry on failure
 //   - GET             → any live node (reads are served locally on each node)
 func proxyRequest(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -49,8 +49,7 @@ func proxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
-		// Writes: leader only
-		sendToNode(w, r, bodyBytes, LeaderID)
+		forwardWrite(w, r, bodyBytes)
 		return
 	}
 
@@ -58,29 +57,89 @@ func proxyRequest(w http.ResponseWriter, r *http.Request) {
 	sendToAnyNode(w, r, bodyBytes)
 }
 
-// sendToNode forwards a request to a single node and writes the response back.
-func sendToNode(w http.ResponseWriter, r *http.Request, bodyBytes []byte, nodeID int) {
+// forwardWrite sends a write request to the node recorded in currentLeaderID.
+// If that node is unreachable or returns 5xx, it calls discoverLeader to find
+// the new leader, updates currentLeaderID, and retries once.
+func forwardWrite(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+	leaderID := int(currentLeaderID.Load())
+	resp, err := tryNode(r, bodyBytes, leaderID)
+	if err == nil && resp.StatusCode < 500 {
+		copyResponse(w, resp)
+		return
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	// Leader is down or returned 5xx — discover who is leader now.
+	fmt.Printf("[Gateway] leader node %d unreachable, discovering new leader...\n", leaderID)
+	newLeader := discoverLeader()
+	if newLeader < 0 {
+		http.Error(w, "503 no leader available", http.StatusServiceUnavailable)
+		return
+	}
+	currentLeaderID.Store(int32(newLeader))
+	fmt.Printf("[Gateway] new leader: node %d\n", newLeader)
+
+	resp2, err2 := tryNode(r, bodyBytes, newLeader)
+	if err2 != nil {
+		http.Error(w, "503 leader unavailable after discovery", http.StatusServiceUnavailable)
+		return
+	}
+	copyResponse(w, resp2)
+}
+
+// tryNode sends a single HTTP request to a node and returns the raw response.
+// It does NOT write to any ResponseWriter; the caller owns resp.Body.
+// Redirects are not followed so we see the node's actual status code.
+func tryNode(r *http.Request, bodyBytes []byte, nodeID int) (*http.Response, error) {
 	target := fmt.Sprintf("http://localhost:%d%s", InternalBasePort+nodeID, r.URL.RequestURI())
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	req, err := http.NewRequest(r.Method, target, bytes.NewReader(bodyBytes))
 	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	for k, v := range r.Header {
 		req.Header[k] = v
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		http.Error(w, "leader unavailable", http.StatusServiceUnavailable)
-		return
-	}
+	return client.Do(req)
+}
+
+// copyResponse streams a node's HTTP response back to the gateway client.
+func copyResponse(w http.ResponseWriter, resp *http.Response) {
 	defer resp.Body.Close()
 	for k, v := range resp.Header {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+// discoverLeader queries the /status endpoint of every node and returns the
+// ID of the one that reports isLeader:true. Returns -1 if none found.
+func discoverLeader() int {
+	client := &http.Client{Timeout: 1 * time.Second}
+	for i := 0; i < NumNodes; i++ {
+		url := fmt.Sprintf("http://localhost:%d/status", InternalBasePort+i)
+		resp, err := client.Get(url)
+		if err != nil {
+			continue
+		}
+		var s struct {
+			IsLeader bool `json:"isLeader"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&s)
+		resp.Body.Close()
+		if decodeErr == nil && s.IsLeader {
+			return i
+		}
+	}
+	return -1
 }
 
 // sendToAnyNode fires requests to all nodes concurrently and uses the first
@@ -98,17 +157,7 @@ func sendToAnyNode(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 
 		for i := 0; i < NumNodes; i++ {
 			go func(id int) {
-				target := fmt.Sprintf("http://localhost:%d%s", InternalBasePort+id, r.URL.RequestURI())
-				client := &http.Client{Timeout: 2 * time.Second}
-				req, err := http.NewRequest(r.Method, target, bytes.NewReader(bodyBytes))
-				if err != nil {
-					ch <- nodeResult{nil, id}
-					return
-				}
-				for k, v := range r.Header {
-					req.Header[k] = v
-				}
-				resp, err := client.Do(req)
+				resp, err := tryNode(r, bodyBytes, id)
 				if err != nil {
 					ch <- nodeResult{nil, id}
 					return
@@ -132,12 +181,7 @@ func sendToAnyNode(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 
 		if winner.resp != nil {
 			currentLeaderID.Store(int32(winner.nodeID))
-			for k, v := range winner.resp.Header {
-				w.Header()[k] = v
-			}
-			w.WriteHeader(winner.resp.StatusCode)
-			io.Copy(w, winner.resp.Body)
-			winner.resp.Body.Close()
+			copyResponse(w, winner.resp)
 			return
 		}
 
@@ -289,6 +333,14 @@ func startNode(id int) {
 		c.Set("nodeID", id)
 		c.Next()
 	})
+	// /status lets the gateway discover which node is currently the leader.
+	router.GET("/status", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"nodeID":   id,
+			"isLeader": controllers.CmdCh != nil,
+		})
+	})
+
 	router.GET("/customers", controllers.GetCustomers)
 	router.GET("/customers/:id", controllers.GetCustomerByID)
 	router.POST("/customers", controllers.PostCustomer)
