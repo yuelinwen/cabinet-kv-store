@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/rpc"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -348,23 +350,43 @@ func startNode(id int) {
 }
 
 func main() {
+	// Parse command-line flags
+	nodeID := flag.Int("id", -1, "this node ID (0=leader, 1=follower, 2=follower)")
+	startGW := flag.Bool("gateway", false, "also start the gateway on port 8080")
+	flag.Parse()
+
+	// Validate node ID
+	if *nodeID < 0 || *nodeID >= NumNodes {
+		fmt.Fprintf(os.Stderr, "Error: -id must be in range [0, %d)\n", NumNodes)
+		fmt.Fprintf(os.Stderr, "Usage: go run . -id <nodeID> [-gateway]\n")
+		os.Exit(1)
+	}
+
+	role := "follower"
+	if *nodeID == LeaderID {
+		role = "leader"
+	}
+
 	fmt.Printf("[Cabinet] Cluster config: n=%d, t=%d, leader=%d\n", NumNodes, Tolerance, LeaderID)
+	fmt.Printf("[Cabinet] Starting node %d (role=%s)\n", *nodeID, role)
 
 	var wg sync.WaitGroup
 
+	// Optionally start gateway (only one instance needed, typically on leader node)
+	if *startGW {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			startGateway()
+		}()
+	}
+
+	// Start the specified node (blocks until error)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		startGateway()
+		startNode(*nodeID)
 	}()
-
-	for id := 0; id < NumNodes; id++ {
-		wg.Add(1)
-		go func(nodeID int) {
-			defer wg.Done()
-			startNode(nodeID)
-		}(id)
-	}
 
 	wg.Wait()
 }
