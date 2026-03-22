@@ -305,23 +305,49 @@ func startNode(id int) {
 	myState.SetLeaderID(LeaderID)
 	kvExec := makeKVExecutor(id)
 
+	// cmdCh is pre-created for all nodes: followers need it ready in case
+	// they win an election and transition to leader role.
+	cmdCh := make(chan cabinet.KVCommand, 100)
+
 	if id == LeaderID {
 		// Leader: inject cmdCh into HTTP controllers, then establish RPC
 		// connections to all followers and start the Cabinet consensus loop.
-		cmdCh := make(chan cabinet.KVCommand, 100)
 		controllers.CmdCh = cmdCh
 
 		go func() {
 			cabinet.EstablishRPCs(id, NumNodes, RPCBasePort)
-			go cabinet.RunHeartbeat(LeaderID)
+			go cabinet.RunHeartbeat(LeaderID, 0) // term=0: initial fixed leader
 			cabinet.RunConsensus(myPriority, &myState, pManager, NumNodes, cmdCh, kvExec)
 		}()
 	} else {
 		// Follower: expose CabService RPC so the leader can replicate writes.
-		svc := cabinet.NewCabService(id, myPriority, kvExec)
-		svc.StartHeartbeatMonitor(func() {
-			fmt.Printf("[Node %d] leader heartbeat timeout — leader may be down\n", id)
-		})
+		svc := cabinet.NewCabService(id, myPriority, &myState, kvExec)
+
+		// onTimeout is declared as a var so the closure can reference itself
+		// when restarting the monitor after a lost election.
+		var onTimeout func()
+		onTimeout = func() {
+			fmt.Printf("[Node %d] heartbeat timeout — starting election\n", id)
+			won := cabinet.StartElection(id, NumNodes, Tolerance, RPCBasePort, &myState)
+			if won {
+				// Wire up the write pipeline immediately, then start heartbeat
+				// BEFORE waiting for peer connections — this prevents other
+				// followers from timing out and running a competing election.
+				controllers.CmdCh = cmdCh
+				fmt.Printf("[Node %d] became leader (term %d), starting heartbeat\n",
+					id, myState.GetTerm())
+				go cabinet.RunHeartbeat(id, myState.GetTerm())
+				// Connect to peers (2s timeout each) then start consensus.
+				go func() {
+					cabinet.EstablishRPCsBestEffort(id, NumNodes, RPCBasePort)
+					cabinet.RunConsensus(myPriority, &myState, pManager, NumNodes, cmdCh, kvExec)
+				}()
+			} else {
+				// Lost election — restart monitor to detect future failures.
+				svc.StartHeartbeatMonitor(onTimeout)
+			}
+		}
+		svc.StartHeartbeatMonitor(onTimeout)
 		go startFollowerRPC(id, svc)
 	}
 

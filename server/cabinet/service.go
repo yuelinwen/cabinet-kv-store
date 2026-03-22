@@ -25,30 +25,64 @@ type Reply struct {
 	ErrMsg  string
 }
 
-// CabService is the RPC receiver registered on each follower node.
+// CabService is the RPC receiver registered on each node.
 // Adapted from cabinet/service.go.
 type CabService struct {
 	nodeID        int
 	Priority      *smr.PriorityState
+	myState       *smr.ServerState
 	KVExecutor    func(op, key, valueJSON string) error
 	lastHeartbeat atomic.Int64 // Unix nanoseconds; updated by Heartbeat RPC
 	beatCount     atomic.Int64 // counts heartbeats received, for log throttling
 }
 
-func NewCabService(nodeID int, p *smr.PriorityState, exec func(op, key, valueJSON string) error) *CabService {
-	svc := &CabService{nodeID: nodeID, Priority: p, KVExecutor: exec}
+func NewCabService(nodeID int, p *smr.PriorityState, state *smr.ServerState, exec func(op, key, valueJSON string) error) *CabService {
+	svc := &CabService{nodeID: nodeID, Priority: p, myState: state, KVExecutor: exec}
 	svc.lastHeartbeat.Store(time.Now().UnixNano())
 	return svc
 }
 
 // Heartbeat is the RPC method the leader calls periodically.
-// It refreshes the follower's lastHeartbeat timestamp.
+// It refreshes the follower's lastHeartbeat timestamp and syncs the leaderID.
+// Heartbeats from a lower-term sender (stale leader) are silently ignored.
 func (s *CabService) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) error {
+	if args.Term < s.myState.GetTerm() {
+		// Stale leader — do not reset the timeout so the current leader is
+		// still recognised as legitimate.
+		reply.Success = false
+		return nil
+	}
 	s.lastHeartbeat.Store(time.Now().UnixNano())
+	s.myState.SetLeaderID(args.LeaderID)
 	reply.Success = true
 	n := s.beatCount.Add(1)
 	if n%10 == 0 {
-		fmt.Printf("[Node %d] heartbeat received from leader (beat #%d)\n", s.nodeID, n)
+		fmt.Printf("[Node %d] heartbeat received from leader %d (term %d, beat #%d)\n",
+			s.nodeID, args.LeaderID, args.Term, n)
+	}
+	return nil
+}
+
+// RequestVote is the RPC method candidates call during a leader election.
+// Implements Raft vote-granting rules: grant if candidate's term > our term.
+func (s *CabService) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) error {
+	myTerm := s.myState.GetTerm()
+	reply.Term = myTerm
+
+	if args.Term <= myTerm {
+		reply.VoteGranted = false
+		fmt.Printf("[Node %d] denied vote for node %d (their term %d <= my term %d)\n",
+			s.nodeID, args.CandidateID, args.Term, myTerm)
+		return nil
+	}
+
+	if s.myState.TryVote(args.Term, args.CandidateID) {
+		s.myState.SetTerm(args.Term)
+		reply.VoteGranted = true
+		fmt.Printf("[Node %d] voted for node %d in term %d\n", s.nodeID, args.CandidateID, args.Term)
+	} else {
+		reply.VoteGranted = false
+		fmt.Printf("[Node %d] already voted this term, denied node %d\n", s.nodeID, args.CandidateID)
 	}
 	return nil
 }

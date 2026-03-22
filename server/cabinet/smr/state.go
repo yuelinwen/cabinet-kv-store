@@ -3,16 +3,15 @@ package smr
 import "sync"
 
 // ServerState holds node identity and Raft-style bookkeeping fields.
-// Note: term and votedFor are placeholders for leader election (Plan B).
-// They are not used in Phase 1 (fixed leader).
 type ServerState struct {
 	sync.RWMutex
-	myID     int
-	leaderID int
-	term     int
-	votedFor bool
-	logIndex int
-	cmtIndex int
+	myID         int
+	leaderID     int
+	term         int
+	votedForTerm int // the term in which this node last cast a vote
+	votedForID   int // the candidate that received the vote (-1 = none)
+	logIndex     int
+	cmtIndex     int
 }
 
 func NewServerState() ServerState {
@@ -35,11 +34,23 @@ func (s *ServerState) GetLeaderID() int {
 	return s.leaderID
 }
 
-// Term / election fields (unused in Phase 1)
+// Term / election fields
 func (s *ServerState) SetTerm(term int) { s.Lock(); defer s.Unlock(); s.term = term }
 func (s *ServerState) GetTerm() int     { return s.term }
-func (s *ServerState) ResetVotedFor()   { s.Lock(); defer s.Unlock(); s.votedFor = false }
-func (s *ServerState) CheckVotedFor() bool { return s.votedFor }
+
+// TryVote grants a vote to candidateID for the given term.
+// Returns true if the vote was granted (first vote this term).
+// Returns false if we already voted this term.
+func (s *ServerState) TryVote(term, candidateID int) bool {
+	s.Lock()
+	defer s.Unlock()
+	if term > s.votedForTerm {
+		s.votedForTerm = term
+		s.votedForID = candidateID
+		return true
+	}
+	return false
+}
 
 // Log / commit index
 func (s *ServerState) AddCommitIndex(n int) { s.Lock(); defer s.Unlock(); s.cmtIndex += n }

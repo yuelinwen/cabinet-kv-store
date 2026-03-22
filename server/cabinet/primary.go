@@ -2,10 +2,46 @@ package cabinet
 
 import (
 	"fmt"
+	"net"
 	"net/rpc"
 	"sync"
 	"time"
 )
+
+// EstablishRPCsBestEffort dials each peer once with a 2-second timeout per node.
+// Unreachable nodes are skipped (no infinite retry). Returns after all attempts
+// complete. Used by a newly elected leader so it can start heartbeats quickly
+// without waiting forever for nodes that may be dead.
+func EstablishRPCsBestEffort(myServerID, numServers, rpcBasePort int) {
+	var wg sync.WaitGroup
+	for i := 0; i < numServers; i++ {
+		if i == myServerID {
+			continue
+		}
+		wg.Add(1)
+		go func(peerID int) {
+			defer wg.Done()
+			addr := fmt.Sprintf("localhost:%d", rpcBasePort+peerID)
+			raw, err := net.DialTimeout("tcp", addr, 2*time.Second)
+			if err != nil {
+				fmt.Printf("[Cabinet] node %d unreachable (skipped): %v\n", peerID, err)
+				return
+			}
+			txClient := rpc.NewClient(raw)
+			conns.Lock()
+			conns.m[peerID] = &ServerDock{
+				serverID: peerID,
+				addr:     addr,
+				txClient: txClient,
+				jobQMu:   sync.RWMutex{},
+				jobQ:     map[int]chan struct{}{},
+			}
+			conns.Unlock()
+			fmt.Printf("[Cabinet] connected to node %d\n", peerID)
+		}(i)
+	}
+	wg.Wait()
+}
 
 // EstablishRPCs dials the RPC port of every follower and stores connections in conns.
 // Adapted from cabinet/primary.go — config-file parsing replaced with direct port
