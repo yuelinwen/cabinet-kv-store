@@ -1,6 +1,10 @@
 package cabinet
 
 import (
+	"fmt"
+	"sync/atomic"
+	"time"
+
 	"github.com/yuelinwen/cabinet-kv-store/server/cabinet/smr"
 )
 
@@ -24,14 +28,47 @@ type Reply struct {
 // CabService is the RPC receiver registered on each follower node.
 // Adapted from cabinet/service.go.
 type CabService struct {
-	Priority   *smr.PriorityState
-	// KVExecutor is injected by the node setup and applies the command to
-	// this node's own MongoDB collection.
-	KVExecutor func(op, key, valueJSON string) error
+	nodeID        int
+	Priority      *smr.PriorityState
+	KVExecutor    func(op, key, valueJSON string) error
+	lastHeartbeat atomic.Int64 // Unix nanoseconds; updated by Heartbeat RPC
+	beatCount     atomic.Int64 // counts heartbeats received, for log throttling
 }
 
-func NewCabService(p *smr.PriorityState, exec func(op, key, valueJSON string) error) *CabService {
-	return &CabService{Priority: p, KVExecutor: exec}
+func NewCabService(nodeID int, p *smr.PriorityState, exec func(op, key, valueJSON string) error) *CabService {
+	svc := &CabService{nodeID: nodeID, Priority: p, KVExecutor: exec}
+	svc.lastHeartbeat.Store(time.Now().UnixNano())
+	return svc
+}
+
+// Heartbeat is the RPC method the leader calls periodically.
+// It refreshes the follower's lastHeartbeat timestamp.
+func (s *CabService) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) error {
+	s.lastHeartbeat.Store(time.Now().UnixNano())
+	reply.Success = true
+	n := s.beatCount.Add(1)
+	if n%10 == 0 {
+		fmt.Printf("[Node %d] heartbeat received from leader (beat #%d)\n", s.nodeID, n)
+	}
+	return nil
+}
+
+// StartHeartbeatMonitor starts a background goroutine that calls onTimeout
+// if no heartbeat is received within HeartbeatTimeout.
+// onTimeout is called once; the monitor stops after triggering.
+func (s *CabService) StartHeartbeatMonitor(onTimeout func()) {
+	go func() {
+		ticker := time.NewTicker(HeartbeatTimeout / 2)
+		defer ticker.Stop()
+		for range ticker.C {
+			last := time.Unix(0, s.lastHeartbeat.Load())
+			if time.Since(last) > HeartbeatTimeout {
+				fmt.Printf("[Heartbeat] timeout — leader may be down\n")
+				onTimeout()
+				return
+			}
+		}
+	}()
 }
 
 // ConsensusService is the single RPC method followers expose.

@@ -21,3 +21,13 @@ type ReplyInfo struct {
 	PClock PrioClock
 	Recv   Reply
 }
+
+// HeartbeatArgs is the payload the leader sends in each heartbeat.
+type HeartbeatArgs struct {
+	LeaderID int
+}
+
+// HeartbeatReply is the follower's acknowledgement of a heartbeat.
+type HeartbeatReply struct {
+	Success bool
+}

@@ -313,11 +313,15 @@ func startNode(id int) {
 
 		go func() {
 			cabinet.EstablishRPCs(id, NumNodes, RPCBasePort)
+			go cabinet.RunHeartbeat(LeaderID)
 			cabinet.RunConsensus(myPriority, &myState, pManager, NumNodes, cmdCh, kvExec)
 		}()
 	} else {
 		// Follower: expose CabService RPC so the leader can replicate writes.
-		svc := cabinet.NewCabService(myPriority, kvExec)
+		svc := cabinet.NewCabService(id, myPriority, kvExec)
+		svc.StartHeartbeatMonitor(func() {
+			fmt.Printf("[Node %d] leader heartbeat timeout — leader may be down\n", id)
+		})
 		go startFollowerRPC(id, svc)
 	}
 
