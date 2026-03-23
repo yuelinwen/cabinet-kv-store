@@ -42,6 +42,7 @@ func (pm *PriorityManager) Init(numOfServers, quorumSize, baseOfPriorities int, 
 	reverseSlice(pm.scheme)
 
 	pm.majority = sum(pm.scheme) / 2
+	fmt.Printf("[Cabinet] weight scheme: %v | majority=%.4f\n", pm.scheme, pm.majority)
 
 	pm.Lock()
 	pm.m[0] = newPriorities

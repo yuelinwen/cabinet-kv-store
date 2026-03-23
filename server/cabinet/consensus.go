@@ -121,6 +121,9 @@ func RunConsensus(
 		leaderPClock++
 		if err := pManager.UpdateFollowerPriorities(leaderPClock, prioQueue, myState.GetLeaderID()); err != nil {
 			fmt.Printf("[Cabinet] UpdateFollowerPriorities failed: %v\n", err)
+		} else {
+			newWeights := pManager.GetFollowerPriorities(leaderPClock)
+			fmt.Printf("[Cabinet] pClock=%d weights for next round: %v\n", leaderPClock, newWeights)
 		}
 	}
 }

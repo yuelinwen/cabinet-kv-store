@@ -172,6 +172,7 @@ func initCabinetPriority(nodeID int) (*smr.PriorityState, *smr.PriorityManager) 
 	fprios := pm.GetFollowerPriorities(0)
 	ps := smr.NewServerPriority(0, fprios[nodeID])
 	ps.Majority = pm.GetMajority()
+	fmt.Printf("[Node %d] initial weight=%.4f | majority=%.4f\n", nodeID, ps.PrioVal, ps.Majority)
 	return &ps, pm
 }
 
