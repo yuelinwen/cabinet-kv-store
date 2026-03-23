@@ -57,7 +57,7 @@ func (s *CabService) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) error
 	reply.Success = true
 	n := s.beatCount.Add(1)
 	if n%10 == 0 {
-		fmt.Printf("[Node %d] heartbeat received from leader %d (term %d, beat #%d)\n",
+		fmt.Printf("[Node %d | Follower  | RPC ] heartbeat from leader %d (term %d, beat #%d)\n",
 			s.nodeID, args.LeaderID, args.Term, n)
 	}
 	return nil
@@ -71,7 +71,7 @@ func (s *CabService) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply)
 
 	if args.Term <= myTerm {
 		reply.VoteGranted = false
-		fmt.Printf("[Node %d] denied vote for node %d (their term %d <= my term %d)\n",
+		fmt.Printf("[Node %d | Follower  | RPC ] denied vote for node %d (term %d <= my term %d)\n",
 			s.nodeID, args.CandidateID, args.Term, myTerm)
 		return nil
 	}
@@ -79,10 +79,10 @@ func (s *CabService) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply)
 	if s.myState.TryVote(args.Term, args.CandidateID) {
 		s.myState.SetTerm(args.Term)
 		reply.VoteGranted = true
-		fmt.Printf("[Node %d] voted for node %d in term %d\n", s.nodeID, args.CandidateID, args.Term)
+		fmt.Printf("[Node %d | Follower  | RPC ] voted for node %d (term %d)\n", s.nodeID, args.CandidateID, args.Term)
 	} else {
 		reply.VoteGranted = false
-		fmt.Printf("[Node %d] already voted this term, denied node %d\n", s.nodeID, args.CandidateID)
+		fmt.Printf("[Node %d | Follower  | RPC ] already voted this term, denied node %d\n", s.nodeID, args.CandidateID)
 	}
 	return nil
 }
@@ -97,7 +97,7 @@ func (s *CabService) StartHeartbeatMonitor(onTimeout func()) {
 		for range ticker.C {
 			last := time.Unix(0, s.lastHeartbeat.Load())
 			if time.Since(last) > HeartbeatTimeout {
-				fmt.Printf("[Heartbeat] timeout — leader may be down\n")
+				fmt.Printf("[Node %d | Follower  | RPC ] heartbeat timeout — leader may be down\n", s.nodeID)
 				onTimeout()
 				return
 			}

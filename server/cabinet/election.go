@@ -32,7 +32,7 @@ func StartElection(nodeID, numNodes, tolerance, rpcBasePort int, state *smr.Serv
 	quorum := numNodes - tolerance
 	votes := 1 // self-vote counts immediately
 
-	fmt.Printf("[Election] node %d starting term %d (need %d/%d votes)\n",
+	fmt.Printf("[Node %d | Candidate | RPC ] election term %d: need %d/%d votes\n",
 		nodeID, newTerm, quorum, numNodes)
 
 	var mu sync.Mutex
@@ -50,23 +50,23 @@ func StartElection(nodeID, numNodes, tolerance, rpcBasePort int, state *smr.Serv
 			addr := fmt.Sprintf("localhost:%d", rpcBasePort+peerID)
 			client, err := rpc.Dial("tcp", addr)
 			if err != nil {
-				fmt.Printf("[Election] node %d unreachable: %v\n", peerID, err)
+				fmt.Printf("[Node %d | Candidate | RPC ] node %d unreachable: %v\n", nodeID, peerID, err)
 				return
 			}
 			defer client.Close()
 
 			reply := &RequestVoteReply{}
 			if err := client.Call(requestVoteMethod, args, reply); err != nil {
-				fmt.Printf("[Election] RequestVote to node %d failed: %v\n", peerID, err)
+				fmt.Printf("[Node %d | Candidate | RPC ] RequestVote to node %d failed: %v\n", nodeID, peerID, err)
 				return
 			}
 			if reply.VoteGranted {
 				mu.Lock()
 				votes++
 				mu.Unlock()
-				fmt.Printf("[Election] node %d got vote from node %d\n", nodeID, peerID)
+				fmt.Printf("[Node %d | Candidate | RPC ] +vote from node %d\n", nodeID, peerID)
 			} else {
-				fmt.Printf("[Election] node %d vote denied by node %d (their term=%d)\n",
+				fmt.Printf("[Node %d | Candidate | RPC ] vote denied by node %d (their term %d)\n",
 					nodeID, peerID, reply.Term)
 			}
 		}(i)
@@ -75,13 +75,13 @@ func StartElection(nodeID, numNodes, tolerance, rpcBasePort int, state *smr.Serv
 	wg.Wait()
 
 	if votes >= quorum {
-		fmt.Printf("[Election] node %d WON (term %d, %d/%d votes)\n",
+		fmt.Printf("[Node %d | Leader    | RPC ] won election term %d (%d/%d votes) — now LEADER\n",
 			nodeID, newTerm, votes, numNodes)
 		state.SetLeaderID(nodeID)
 		return true
 	}
 
-	fmt.Printf("[Election] node %d LOST (term %d, only %d/%d votes)\n",
+	fmt.Printf("[Node %d | Candidate | RPC ] lost election term %d (%d/%d votes)\n",
 		nodeID, newTerm, votes, numNodes)
 	return false
 }

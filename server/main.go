@@ -42,7 +42,7 @@ var currentLeaderID atomic.Int32
 // proxyRequest dispatches all requests to the current leader.
 // Reads go to the leader for consistency (no stale reads from followers).
 // Writes also go to the leader so Cabinet consensus can be applied.
-func proxyRequest(w http.ResponseWriter, r *http.Request) {
+func proxyRequest(nodeID int, w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	r.Body.Close()
 	if err != nil {
@@ -50,13 +50,13 @@ func proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	forwardWrite(w, r, bodyBytes)
+	forwardWrite(nodeID, w, r, bodyBytes)
 }
 
 // forwardWrite sends a write request to the node recorded in currentLeaderID.
 // If that node is unreachable or returns 5xx, it calls discoverLeader to find
 // the new leader, updates currentLeaderID, and retries once.
-func forwardWrite(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+func forwardWrite(nodeID int, w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 	leaderID := int(currentLeaderID.Load())
 	resp, err := tryNode(r, bodyBytes, leaderID)
 	if err == nil && resp.StatusCode < 500 {
@@ -68,14 +68,14 @@ func forwardWrite(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 	}
 
 	// Leader is down or returned 5xx — discover who is leader now.
-	fmt.Printf("[Gateway] leader node %d unreachable, discovering new leader...\n", leaderID)
+	fmt.Printf("[Node %d | Leader    | HTTP] leader node %d unreachable, discovering new leader...\n", nodeID, leaderID)
 	newLeader := discoverLeader()
 	if newLeader < 0 {
 		http.Error(w, "503 no leader available", http.StatusServiceUnavailable)
 		return
 	}
 	currentLeaderID.Store(int32(newLeader))
-	fmt.Printf("[Gateway] new leader: node %d\n", newLeader)
+	fmt.Printf("[Node %d | Leader    | HTTP] new leader: node %d\n", nodeID, newLeader)
 
 	resp2, err2 := tryNode(r, bodyBytes, newLeader)
 	if err2 != nil {
@@ -140,7 +140,7 @@ func discoverLeader() int {
 
 // sendToAnyNode fires requests to all nodes concurrently and uses the first
 // successful response. Retries every 500ms for up to 30 seconds.
-func sendToAnyNode(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+func sendToAnyNode(nodeID int, w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 	type nodeResult struct {
 		resp   *http.Response
 		nodeID int
@@ -181,7 +181,7 @@ func sendToAnyNode(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 			return
 		}
 
-		fmt.Printf("[Gateway] all nodes unreachable, retrying in 500ms...\n")
+		fmt.Printf("[Node %d | Leader    | HTTP] all nodes unreachable, retrying in 500ms...\n", nodeID)
 		time.Sleep(500 * time.Millisecond)
 	}
 
@@ -189,15 +189,17 @@ func sendToAnyNode(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 }
 
 // startGateway runs the single public-facing HTTP proxy on GatewayPort.
-func startGateway() {
+func startGateway(nodeID int) {
 	currentLeaderID.Store(int32(LeaderID))
-	fmt.Printf("[Gateway] listening on localhost:%d → internal nodes %d..%d\n",
-		GatewayPort, InternalBasePort, InternalBasePort+NumNodes-1)
+	fmt.Printf("[Node %d | Leader    | HTTP] gateway listening on :%d → nodes %d..%d\n",
+		nodeID, GatewayPort, InternalBasePort, InternalBasePort+NumNodes-1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", proxyRequest)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		proxyRequest(nodeID, w, r)
+	})
 	if err := http.ListenAndServe(fmt.Sprintf("localhost:%d", GatewayPort), mux); err != nil {
-		fmt.Printf("[Gateway] error: %v\n", err)
+		fmt.Printf("[Node %d | Leader    | HTTP] gateway error: %v\n", nodeID, err)
 	}
 }
 
@@ -263,16 +265,16 @@ func makeKVExecutor(nodeID int) func(op, key, valueJSON string) error {
 func startFollowerRPC(id int, svc *cabinet.CabService) {
 	server := rpc.NewServer()
 	if err := server.Register(svc); err != nil {
-		fmt.Printf("[Node %d] RPC register error: %v\n", id, err)
+		fmt.Printf("[Node %d | Follower  | RPC ] register error: %v\n", id, err)
 		return
 	}
 	addr := fmt.Sprintf("localhost:%d", RPCBasePort+id)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		fmt.Printf("[Node %d] RPC listen error: %v\n", id, err)
+		fmt.Printf("[Node %d | Follower  | RPC ] listen error: %v\n", id, err)
 		return
 	}
-	fmt.Printf("[Node %d] RPC server listening on %s\n", id, addr)
+	fmt.Printf("[Node %d | Follower  | RPC ] server listening on %s\n", id, addr)
 	server.Accept(ln)
 }
 
@@ -280,12 +282,12 @@ func startFollowerRPC(id int, svc *cabinet.CabService) {
 
 // startNode initialises and runs a single Cabinet node on its internal port.
 func startNode(id int) {
-	role := "follower"
-	if id == LeaderID {
-		role = "leader"
-	}
 	addr := fmt.Sprintf("localhost:%d", InternalBasePort+id)
-	fmt.Printf("[Node %d] starting as %s on %s\n", id, role, addr)
+	if id == LeaderID {
+		fmt.Printf("[Node %d | Leader    | HTTP] starting on %s\n", id, addr)
+	} else {
+		fmt.Printf("[Node %d | Follower  | HTTP] starting on %s\n", id, addr)
+	}
 
 	// 1. Connect this node to its own MongoDB database
 	database.ConnectMongoDB(id)
@@ -327,14 +329,14 @@ func startNode(id int) {
 		// when restarting the monitor after a lost election.
 		var onTimeout func()
 		onTimeout = func() {
-			fmt.Printf("[Node %d] heartbeat timeout — starting election\n", id)
+			fmt.Printf("[Node %d | Follower  | RPC ] heartbeat timeout — starting election\n", id)
 			won := cabinet.StartElection(id, NumNodes, Tolerance, RPCBasePort, &myState)
 			if won {
 				// Wire up the write pipeline immediately, then start heartbeat
 				// BEFORE waiting for peer connections — this prevents other
 				// followers from timing out and running a competing election.
 				controllers.CmdCh = cmdCh
-				fmt.Printf("[Node %d] became leader (term %d), starting heartbeat\n",
+				fmt.Printf("[Node %d | Leader    | RPC ] won election term %d — now LEADER\n",
 					id, myState.GetTerm())
 				go cabinet.RunHeartbeat(id, myState.GetTerm())
 				// Connect to peers (2s timeout each) then start consensus.
@@ -375,7 +377,11 @@ func startNode(id int) {
 
 	// 5. Start listening on internal port
 	if err := router.Run(addr); err != nil {
-		fmt.Printf("[Node %d] gin error: %v\n", id, err)
+		if id == LeaderID {
+			fmt.Printf("[Node %d | Leader    | HTTP] gin error: %v\n", id, err)
+		} else {
+			fmt.Printf("[Node %d | Follower  | HTTP] gin error: %v\n", id, err)
+		}
 	}
 }
 
@@ -407,7 +413,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			startGateway()
+			startGateway(*nodeID)
 		}()
 	}
 

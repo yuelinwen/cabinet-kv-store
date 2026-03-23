@@ -33,11 +33,11 @@ func sendHeartbeat(conn *ServerDock, leaderID, term int) {
 	args := &HeartbeatArgs{LeaderID: leaderID, Term: term}
 	reply := &HeartbeatReply{}
 	if err := conn.txClient.Call(heartbeatMethod, args, reply); err != nil {
-		fmt.Printf("[Heartbeat] node %d unreachable: %v\n", conn.serverID, err)
+		fmt.Printf("[Node %d | Leader    | RPC ] heartbeat → node %d failed: %v\n", leaderID, conn.serverID, err)
 		return
 	}
 	n := beatCount.Add(1)
 	if n%10 == 0 {
-		fmt.Printf("[Heartbeat] leader → node %d ok (beat #%d)\n", conn.serverID, n)
+		fmt.Printf("[Node %d | Leader    | RPC ] heartbeat → node %d ok (beat #%d)\n", leaderID, conn.serverID, n)
 	}
 }

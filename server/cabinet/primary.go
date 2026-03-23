@@ -24,7 +24,7 @@ func EstablishRPCsBestEffort(myServerID, numServers, rpcBasePort int) {
 			addr := fmt.Sprintf("localhost:%d", rpcBasePort+peerID)
 			raw, err := net.DialTimeout("tcp", addr, 2*time.Second)
 			if err != nil {
-				fmt.Printf("[Cabinet] node %d unreachable (skipped): %v\n", peerID, err)
+				fmt.Printf("[Node %d | Leader    | RPC ] node %d unreachable, skipped\n", myServerID, peerID)
 				return
 			}
 			txClient := rpc.NewClient(raw)
@@ -37,7 +37,7 @@ func EstablishRPCsBestEffort(myServerID, numServers, rpcBasePort int) {
 				jobQ:     map[int]chan struct{}{},
 			}
 			conns.Unlock()
-			fmt.Printf("[Cabinet] connected to node %d\n", peerID)
+			fmt.Printf("[Node %d | Leader    | RPC ] connected to node %d\n", myServerID, peerID)
 		}(i)
 	}
 	wg.Wait()
@@ -56,7 +56,7 @@ func EstablishRPCs(myServerID, numServers, rpcBasePort int) {
 		}
 
 		addr := fmt.Sprintf("localhost:%d", rpcBasePort+i)
-		fmt.Printf("[Cabinet] connecting to node %d at %s...\n", i, addr)
+		fmt.Printf("[Node %d | Leader    | RPC ] connecting to node %d at %s...\n", myServerID, i, addr)
 
 		var txClient *rpc.Client
 		var err error
@@ -65,11 +65,11 @@ func EstablishRPCs(myServerID, numServers, rpcBasePort int) {
 			if err == nil {
 				break
 			}
-			fmt.Printf("[Cabinet] node %d not ready, retrying...\n", i)
+			fmt.Printf("[Node %d | Leader    | RPC ] node %d not ready, retrying...\n", myServerID, i)
 			time.Sleep(time.Second)
 		}
 
-		fmt.Printf("[Cabinet] connected to node %d\n", i)
+		fmt.Printf("[Node %d | Leader    | RPC ] connected to node %d\n", myServerID, i)
 
 		conns.Lock()
 		conns.m[i] = &ServerDock{
