@@ -138,56 +138,6 @@ func discoverLeader() int {
 	return -1
 }
 
-// sendToAnyNode fires requests to all nodes concurrently and uses the first
-// successful response. Retries every 500ms for up to 30 seconds.
-func sendToAnyNode(nodeID int, w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
-	type nodeResult struct {
-		resp   *http.Response
-		nodeID int
-	}
-
-	deadline := time.Now().Add(30 * time.Second)
-
-	for time.Now().Before(deadline) {
-		ch := make(chan nodeResult, NumNodes)
-
-		for i := 0; i < NumNodes; i++ {
-			go func(id int) {
-				resp, err := tryNode(r, bodyBytes, id)
-				if err != nil {
-					ch <- nodeResult{nil, id}
-					return
-				}
-				ch <- nodeResult{resp, id}
-			}(i)
-		}
-
-		var winner nodeResult
-		for i := 0; i < NumNodes; i++ {
-			res := <-ch
-			if res.resp == nil {
-				continue
-			}
-			if winner.resp == nil {
-				winner = res
-			} else {
-				res.resp.Body.Close()
-			}
-		}
-
-		if winner.resp != nil {
-			currentLeaderID.Store(int32(winner.nodeID))
-			copyResponse(w, winner.resp)
-			return
-		}
-
-		fmt.Printf("[Node %d | Leader    | HTTP] all nodes unreachable, retrying in 500ms...\n", nodeID)
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	http.Error(w, "503 Service Unavailable: timed out waiting for any node", http.StatusServiceUnavailable)
-}
-
 // startGateway runs the single public-facing HTTP proxy on GatewayPort.
 func startGateway(nodeID int) {
 	currentLeaderID.Store(int32(LeaderID))
@@ -318,7 +268,10 @@ func startNode(id int) {
 
 		go func() {
 			cabinet.EstablishRPCs(id, NumNodes, RPCBasePort)
-			go cabinet.RunHeartbeat(LeaderID, 0) // term=0: initial fixed leader
+			go cabinet.RunHeartbeat(LeaderID, 0, func() { // term=0: initial fixed leader
+				fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", LeaderID)
+				controllers.CmdCh = nil
+			})
 			cabinet.RunConsensus(myPriority, &myState, pManager, NumNodes, cmdCh, kvExec)
 		}()
 	} else {
@@ -338,7 +291,11 @@ func startNode(id int) {
 				controllers.CmdCh = cmdCh
 				fmt.Printf("[Node %d | Leader    | RPC ] won election term %d — now LEADER\n",
 					id, myState.GetTerm())
-				go cabinet.RunHeartbeat(id, myState.GetTerm())
+				go cabinet.RunHeartbeat(id, myState.GetTerm(), func() {
+					fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", id)
+					controllers.CmdCh = nil
+					svc.StartHeartbeatMonitor(onTimeout)
+				})
 				// Connect to peers (2s timeout each) then start consensus.
 				go func() {
 					cabinet.EstablishRPCsBestEffort(id, NumNodes, RPCBasePort)
