@@ -9,8 +9,8 @@ import (
 
 const (
 	heartbeatMethod   = "CabService.Heartbeat"
-	HeartbeatInterval = 150 * time.Millisecond
-	HeartbeatTimeout  = 500 * time.Millisecond
+	HeartbeatInterval = 150 * time.Millisecond // heartbeat interval for the leader to send heartbeats; should be < heartbeat timeout so followers don't falsely detect failure
+	HeartbeatTimeout  = 500 * time.Millisecond // heartbeat timeout for followers to detect leader failure; should be > heartbeat interval + network delay
 )
 
 // RunHeartbeat is called by the leader to broadcast heartbeats every HeartbeatInterval.

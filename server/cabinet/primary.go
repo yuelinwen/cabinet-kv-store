@@ -99,7 +99,7 @@ func EstablishRPCs(myServerID, numServers, rpcBasePort int) {
 				break
 			}
 			fmt.Printf("[Node %d | Leader    | RPC ] node %d not ready, retrying...\n", myServerID, i)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond) // retry every 100 ms until the node is up
 		}
 
 		fmt.Printf("[Node %d | Leader    | RPC ] connected to node %d\n", myServerID, i)
