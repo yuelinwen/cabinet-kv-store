@@ -67,9 +67,17 @@ func forwardWrite(nodeID int, w http.ResponseWriter, r *http.Request, bodyBytes 
 		resp.Body.Close()
 	}
 
-	// Leader is down or returned 5xx — discover who is leader now.
+	// Leader is down or returned 5xx — wait for election to complete, then discover new leader.
 	fmt.Printf("[Node %d | Leader    | HTTP] leader node %d unreachable, discovering new leader...\n", nodeID, leaderID)
-	newLeader := discoverLeader()
+	newLeader := -1
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		newLeader = discoverLeader()
+		if newLeader >= 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	if newLeader < 0 {
 		http.Error(w, "503 no leader available", http.StatusServiceUnavailable)
 		return
@@ -280,7 +288,7 @@ func startNode(id int) {
 			controllers.CmdCh = cmdCh
 			fmt.Printf("[Node %d | Leader    | RPC ] won election term %d — now LEADER\n",
 				id, myState.GetTerm())
-			go cabinet.RunHeartbeat(id, myState.GetTerm(), func() {
+			go cabinet.RunHeartbeat(id, myState.GetTerm(), NumNodes, RPCBasePort, func() {
 				fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", id)
 				controllers.CmdCh = nil
 				svc.StartHeartbeatMonitor(onTimeout)
@@ -302,7 +310,7 @@ func startNode(id int) {
 		controllers.CmdCh = cmdCh
 		go func() {
 			cabinet.EstablishRPCs(id, NumNodes, RPCBasePort)
-			go cabinet.RunHeartbeat(LeaderID, 0, func() { // term=0: initial fixed leader
+			go cabinet.RunHeartbeat(LeaderID, 0, NumNodes, RPCBasePort, func() { // term=0: initial fixed leader
 				fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", id)
 				controllers.CmdCh = nil
 				svc.StartHeartbeatMonitor(onTimeout) // now becomes a follower

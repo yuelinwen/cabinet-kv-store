@@ -17,7 +17,9 @@ const (
 // term is the leader's current election term (0 for the initial fixed leader).
 // onDeposed is called once if any follower rejects a heartbeat (reply.Success=false),
 // meaning a higher-term leader has been elected. RunHeartbeat stops after calling onDeposed.
-func RunHeartbeat(leaderID, term int, onDeposed func()) {
+// numServers and rpcBasePort are used to reconnect to peers that joined after this
+// leader won its election (e.g. node that was down during EstablishRPCsBestEffort).
+func RunHeartbeat(leaderID, term, numServers, rpcBasePort int, onDeposed func()) {
 	stopCh := make(chan struct{})
 	var once sync.Once
 	stop := func() {
@@ -30,11 +32,15 @@ func RunHeartbeat(leaderID, term int, onDeposed func()) {
 	}
 
 	ticker := time.NewTicker(HeartbeatInterval)
+	reconnectTicker := time.NewTicker(HeartbeatInterval * 5) // every ~750 ms
 	defer ticker.Stop()
+	defer reconnectTicker.Stop()
 	for {
 		select {
 		case <-stopCh:
 			return
+		case <-reconnectTicker.C:
+			go tryConnectMissingPeers(leaderID, numServers, rpcBasePort)
 		case <-ticker.C:
 			conns.RLock()
 			for _, conn := range conns.m {

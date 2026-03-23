@@ -8,6 +8,39 @@ import (
 	"time"
 )
 
+// tryConnectMissingPeers dials any peer that is not yet in conns.m.
+// Called periodically by the leader's heartbeat loop to pick up nodes that
+// were not running when EstablishRPCsBestEffort ran (late-joining peers).
+func tryConnectMissingPeers(myServerID, numServers, rpcBasePort int) {
+	for i := 0; i < numServers; i++ {
+		if i == myServerID {
+			continue
+		}
+		conns.RLock()
+		_, exists := conns.m[i]
+		conns.RUnlock()
+		if exists {
+			continue
+		}
+		addr := fmt.Sprintf("localhost:%d", rpcBasePort+i)
+		raw, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		txClient := rpc.NewClient(raw)
+		conns.Lock()
+		conns.m[i] = &ServerDock{
+			serverID: i,
+			addr:     addr,
+			txClient: txClient,
+			jobQMu:   sync.RWMutex{},
+			jobQ:     map[int]chan struct{}{},
+		}
+		conns.Unlock()
+		fmt.Printf("[Node %d | Leader    | RPC ] reconnected to late-joining node %d\n", myServerID, i)
+	}
+}
+
 // EstablishRPCsBestEffort dials each peer once with a 2-second timeout per node.
 // Unreachable nodes are skipped (no infinite retry). Returns after all attempts
 // complete. Used by a newly elected leader so it can start heartbeats quickly
