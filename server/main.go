@@ -261,53 +261,57 @@ func startNode(id int) {
 	// they win an election and transition to leader role.
 	cmdCh := make(chan cabinet.KVCommand, 100)
 
+	// All nodes expose CabService RPC from the start, regardless of initial role.
+	// This allows any node to receive heartbeats/votes/consensus RPCs after a
+	// role transition (e.g. the initial leader being deposed and becoming a follower).
+	svc := cabinet.NewCabService(id, myPriority, &myState, kvExec)
+	go startFollowerRPC(id, svc)
+
+	// onTimeout is declared as a var so the closure can reference itself
+	// when restarting the monitor after a lost election.
+	var onTimeout func()
+	onTimeout = func() {
+		fmt.Printf("[Node %d | Follower  | RPC ] heartbeat timeout — starting election\n", id)
+		won := cabinet.StartElection(id, NumNodes, Tolerance, RPCBasePort, &myState)
+		if won {
+			// Wire up the write pipeline immediately, then start heartbeat
+			// BEFORE waiting for peer connections — this prevents other
+			// followers from timing out and running a competing election.
+			controllers.CmdCh = cmdCh
+			fmt.Printf("[Node %d | Leader    | RPC ] won election term %d — now LEADER\n",
+				id, myState.GetTerm())
+			go cabinet.RunHeartbeat(id, myState.GetTerm(), func() {
+				fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", id)
+				controllers.CmdCh = nil
+				svc.StartHeartbeatMonitor(onTimeout)
+			})
+			// Connect to peers (2s timeout each) then start consensus.
+			go func() {
+				cabinet.EstablishRPCsBestEffort(id, NumNodes, RPCBasePort)
+				cabinet.RunConsensus(myPriority, &myState, pManager, NumNodes, cmdCh, kvExec)
+			}()
+		} else {
+			// Lost election — restart monitor to detect future failures.
+			svc.StartHeartbeatMonitor(onTimeout)
+		}
+	}
+
 	if id == LeaderID {
-		// Leader: inject cmdCh into HTTP controllers, then establish RPC
+		// Initial leader: inject cmdCh into HTTP controllers, then establish RPC
 		// connections to all followers and start the Cabinet consensus loop.
 		controllers.CmdCh = cmdCh
-
 		go func() {
 			cabinet.EstablishRPCs(id, NumNodes, RPCBasePort)
 			go cabinet.RunHeartbeat(LeaderID, 0, func() { // term=0: initial fixed leader
-				fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", LeaderID)
+				fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", id)
 				controllers.CmdCh = nil
+				svc.StartHeartbeatMonitor(onTimeout) // now becomes a follower
 			})
 			cabinet.RunConsensus(myPriority, &myState, pManager, NumNodes, cmdCh, kvExec)
 		}()
 	} else {
-		// Follower: expose CabService RPC so the leader can replicate writes.
-		svc := cabinet.NewCabService(id, myPriority, &myState, kvExec)
-
-		// onTimeout is declared as a var so the closure can reference itself
-		// when restarting the monitor after a lost election.
-		var onTimeout func()
-		onTimeout = func() {
-			fmt.Printf("[Node %d | Follower  | RPC ] heartbeat timeout — starting election\n", id)
-			won := cabinet.StartElection(id, NumNodes, Tolerance, RPCBasePort, &myState)
-			if won {
-				// Wire up the write pipeline immediately, then start heartbeat
-				// BEFORE waiting for peer connections — this prevents other
-				// followers from timing out and running a competing election.
-				controllers.CmdCh = cmdCh
-				fmt.Printf("[Node %d | Leader    | RPC ] won election term %d — now LEADER\n",
-					id, myState.GetTerm())
-				go cabinet.RunHeartbeat(id, myState.GetTerm(), func() {
-					fmt.Printf("[Node %d | Follower  | RPC ] deposed — stepping down from leader\n", id)
-					controllers.CmdCh = nil
-					svc.StartHeartbeatMonitor(onTimeout)
-				})
-				// Connect to peers (2s timeout each) then start consensus.
-				go func() {
-					cabinet.EstablishRPCsBestEffort(id, NumNodes, RPCBasePort)
-					cabinet.RunConsensus(myPriority, &myState, pManager, NumNodes, cmdCh, kvExec)
-				}()
-			} else {
-				// Lost election — restart monitor to detect future failures.
-				svc.StartHeartbeatMonitor(onTimeout)
-			}
-		}
+		// Follower: start heartbeat monitor to detect leader failure.
 		svc.StartHeartbeatMonitor(onTimeout)
-		go startFollowerRPC(id, svc)
 	}
 
 	// 4. Initialise Gin router
