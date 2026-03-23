@@ -63,7 +63,7 @@ cd server && go run . -id 0 -n 3 -gateway
 | `-id` | required | Node ID (`0` = initial leader) |
 | `-n` | `3` | Total number of nodes in the cluster |
 | `-t` | `floor((n-1)/2)` | Failure tolerance |
-| `-gateway` | off | Also start the HTTP gateway on `:8080` |
+| `-gateway` | off |  Start the HTTP gateway/proxy on `:8080` |
 
 ### Example: 5-node cluster
 
