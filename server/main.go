@@ -27,12 +27,16 @@ import (
 
 // Cluster configuration (Phase 1: fixed leader, no election)
 const (
-	NumNodes         = 3    // total number of nodes in the cluster
-	Tolerance        = 1    // Cabinet failure tolerance t
 	LeaderID         = 0    // fixed leader node ID
 	GatewayPort      = 8080 // single public-facing REST port
-	InternalBasePort = 9080 // Gin HTTP ports: 9080, 9081, 9082
-	RPCBasePort      = 9180 // Cabinet RPC ports: 9180, 9181, 9182
+	InternalBasePort = 9080 // Gin HTTP ports: 9080, 9081, ...
+	RPCBasePort      = 9180 // Cabinet RPC ports: 9180, 9181, ...
+)
+
+// Set by -n and -t flags in main(); read-only after flag.Parse().
+var (
+	NumNodes  int // total number of nodes in the cluster
+	Tolerance int // Cabinet failure tolerance t
 )
 
 var currentLeaderID atomic.Int32
@@ -357,14 +361,23 @@ func startNode(id int) {
 
 func main() {
 	// Parse command-line flags
-	nodeID := flag.Int("id", -1, "this node ID (0=leader, 1=follower, 2=follower)")
+	nodeID := flag.Int("id", -1, "this node ID (0=leader, 1=follower, ...)")
+	n := flag.Int("n", 3, "total number of nodes in the cluster")
+	t := flag.Int("t", -1, "failure tolerance (default: floor((n-1)/2))")
 	startGW := flag.Bool("gateway", false, "also start the gateway on port 8080")
 	flag.Parse()
+
+	NumNodes = *n
+	if *t < 0 {
+		Tolerance = (NumNodes - 1) / 2
+	} else {
+		Tolerance = *t
+	}
 
 	// Validate node ID
 	if *nodeID < 0 || *nodeID >= NumNodes {
 		fmt.Fprintf(os.Stderr, "Error: -id must be in range [0, %d)\n", NumNodes)
-		fmt.Fprintf(os.Stderr, "Usage: go run . -id <nodeID> [-gateway]\n")
+		fmt.Fprintf(os.Stderr, "Usage: go run . -id <nodeID> -n <numNodes> [-t <tolerance>] [-gateway]\n")
 		os.Exit(1)
 	}
 
