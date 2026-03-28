@@ -107,6 +107,57 @@ curl -X POST http://localhost:8080/customers \
 curl http://localhost:8080/customers
 ```
 
+## Testing
+
+### Functional Correctness Test (Node.js)
+
+Tests the 5 core API routes end-to-end against a running cluster. Requires Node.js 18+.
+
+**Start the cluster first** (see [Running a Cluster](#running-a-cluster)), then run:
+
+```bash
+node test_functional.js
+```
+
+The script runs 5 tests in sequence — each test depends on the previous one:
+
+| # | Test | Method | Expected |
+|---|------|--------|----------|
+| 1 | GET all customers | `GET /customers` | 200 |
+| 2 | Create new customer | `POST /customers` | 201 + auto-assigned UUID |
+| 3 | Retrieve by ID | `GET /customers/:id` | 200 |
+| 4 | Update customer | `PUT /customers/:id` | 200 |
+| 5 | Delete customer | `DELETE /customers/:id` | 200 |
+
+Expected output:
+
+```
+=====================================================================
+  Cabinet KV Store — Functional Correctness Tests
+  Target: http://localhost:8080
+=====================================================================
+
+  [PASS] GET /customers                    expected=200  actual=200  10 records returned
+  [PASS] POST /customers                   expected=201  actual=201  id: "abc-123", name: "Test User"
+  [PASS] GET /customers/:id                expected=200  actual=200  id: "abc-123", name: "Test User"
+  [PASS] PUT /customers/:id                expected=200  actual=200  id: "abc-123", name: "Updated User"
+  [PASS] DELETE /customers/:id             expected=200  actual=200
+
+=====================================================================
+  Results: 5/5 passed  (100% pass rate)
+=====================================================================
+```
+
+### Visual Test Page (Browser)
+
+A browser-based test page is served by the gateway. With the cluster running:
+
+```
+http://localhost:8080/test
+```
+
+Click **▶ Run All Tests** to run all tests and see live pass/fail results.
+
 ## References
 
 - [Cabinet: A Weighted Consensus Protocol (arXiv)](https://arxiv.org/abs/2503.08914)
