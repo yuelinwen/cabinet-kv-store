@@ -96,10 +96,17 @@ func (s *CabService) StartHeartbeatMonitor(onTimeout func()) {
 		defer ticker.Stop()
 		for range ticker.C {
 			last := time.Unix(0, s.lastHeartbeat.Load())
-			if time.Since(last) > HeartbeatTimeout {
-				fmt.Printf("[Node %d | Follower  | RPC ] heartbeat timeout — leader may be down\n", s.nodeID)
+			elapsed := time.Since(last)
+			if elapsed > HeartbeatTimeout {
+				fmt.Printf("[Node %d | Follower  | HB  ] ✗ timeout — last beat %dms ago (limit %dms) — leader may be down\n",
+					s.nodeID, elapsed.Milliseconds(), HeartbeatTimeout.Milliseconds())
 				onTimeout()
 				return
+			}
+			n := s.beatCount.Load()
+			if n%10 == 0 {
+				fmt.Printf("[Node %d | Follower  | HB  ] ✓ leader alive — last beat %dms ago (limit %dms)\n",
+					s.nodeID, elapsed.Milliseconds(), HeartbeatTimeout.Milliseconds())
 			}
 		}
 	}()

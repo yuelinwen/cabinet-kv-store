@@ -11,6 +11,7 @@ const (
 	heartbeatMethod   = "CabService.Heartbeat"
 	HeartbeatInterval = 150 * time.Millisecond // heartbeat interval for the leader to send heartbeats; should be < heartbeat timeout so followers don't falsely detect failure
 	HeartbeatTimeout  = 500 * time.Millisecond // heartbeat timeout for followers to detect leader failure; should be > heartbeat interval + network delay
+	HeartbeatLogEvery = 10                     // print leader heartbeat success once every N sends
 )
 
 // RunHeartbeat is called by the leader to broadcast heartbeats every HeartbeatInterval.
@@ -66,7 +67,8 @@ func sendHeartbeat(conn *ServerDock, leaderID, term int, onDeposed func()) {
 		return
 	}
 	n := beatCount.Add(1)
-	if n%10 == 0 {
-		fmt.Printf("[Node %d | Leader    | RPC ] heartbeat → node %d ok (beat #%d)\n", leaderID, conn.serverID, n)
+	if n%HeartbeatLogEvery == 0 {
+		fmt.Printf("[Node %d | Leader    | HB  ] ✓ sent → node %d ok | beat #%d | interval ~%dms\n",
+			leaderID, conn.serverID, n, HeartbeatInterval.Milliseconds())
 	}
 }
