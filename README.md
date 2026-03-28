@@ -68,11 +68,11 @@ cd server && go run . -id 0 -n 3 -gateway
 ### Example: 5-node cluster
 
 ```bash
-go run . -id 0 -n 5 -gateway
-go run . -id 1 -n 5
-go run . -id 2 -n 5
-go run . -id 3 -n 5
-go run . -id 4 -n 5
+go run . -id=0 -n=5 -gateway
+go run . -id=1 -n=5
+go run . -id=2 -n=5
+go run . -id=3 -n=5
+go run . -id=4 -n=5
 ```
 
 ### Example: 5-node cluster with custom tolerance (`-t 2`)
@@ -80,11 +80,11 @@ go run . -id 4 -n 5
 Allows up to 2 node failures in the worst case, up to 2 in the best case (n−t−1 = 5−2−1 = 2).
 
 ```bash
-go run . -id 0 -n 5 -t 2 -gateway
-go run . -id 1 -n 5 -t 2
-go run . -id 2 -n 5 -t 2
-go run . -id 3 -n 5 -t 2
-go run . -id 4 -n 5 -t 2
+go run . -id=0 -n=5 -t=2 -gateway
+go run . -id=1 -n=5 -t=2
+go run . -id=2 -n=5 -t=2
+go run . -id=3 -n=5 -t=2
+go run . -id=4 -n=5 -t=2
 ```
 
 ## API
