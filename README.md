@@ -116,7 +116,7 @@ Tests the 5 core API routes end-to-end against a running cluster. Requires Node.
 **Start the cluster first** (see [Running a Cluster](#running-a-cluster)), then run:
 
 ```bash
-node test_functional.js
+node test_functional_test.js
 ```
 
 The script runs 5 tests in sequence — each test depends on the previous one:
@@ -146,6 +146,40 @@ Expected output:
 =====================================================================
   Results: 5/5 passed  (100% pass rate)
 =====================================================================
+```
+
+### Read Performance Test (Node.js)
+
+Runs 100 GET requests to `/customers` and reports average response time.
+
+**Start the cluster first** (see [Running a Cluster](#running-a-cluster)), then run:
+
+```bash
+node test_scability_test.js
+```
+
+What this test prints:
+
+| Metric | Description |
+|---|---|
+| `Success` | Number of successful GET requests out of 100 |
+| `Failed` | Number of failed/time-out requests |
+| `Average response time` | Mean response latency in milliseconds |
+
+Expected output shape:
+
+```
+Target: http://localhost:8080/customers
+Requests: 100
+[20/100] avg=...ms failed=...
+[40/100] avg=...ms failed=...
+...
+============================================================
+Read Performance Result (GET /customers)
+Success: 100/100
+Failed: 0
+Average response time: 2.3456ms
+============================================================
 ```
 
 ### Visual Test Page (Browser)
