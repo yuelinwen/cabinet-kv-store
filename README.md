@@ -116,7 +116,7 @@ Tests the 5 core API routes end-to-end against a running cluster. Requires Node.
 **Start the cluster first** (see [Running a Cluster](#running-a-cluster)), then run:
 
 ```bash
-node test_functional_test.js
+node test_functional.js
 ```
 
 The script runs 5 tests in sequence — each test depends on the previous one:
@@ -162,7 +162,7 @@ chmod +x start_cluster.sh stop_cluster.sh
 ./start_cluster.sh 3
 
 # Run scalability read test
-node test_scability_test.js
+node test_scability.js
 
 # Stop all node processes
 ./stop_cluster.sh
@@ -171,7 +171,7 @@ node test_scability_test.js
 Or if you start nodes manually, run:
 
 ```bash
-node test_scability_test.js
+node test_scability.js
 ```
 
 What this test prints:
@@ -197,6 +197,38 @@ Failed: 0
 Average response time: 2.3456ms
 ============================================================
 ```
+
+### Performance under Failures Test (Node.js)
+
+Measures TPS and latency before and after a follower node is killed, across three kill strategies. Results are saved in [`failure_test_results.csv`](failure_test_results.csv).
+
+**Start the cluster first, then run:**
+
+```bash
+node test_failure.js
+```
+
+The script runs 3 scenarios back-to-back. Between each scenario it will prompt you to **restart all 3 nodes** before continuing.
+
+| Scenario | Killed node | What it tests |
+|----------|-------------|---------------|
+| Strong Kill | Node 1 (highest-weight follower) | Resilience when the fastest follower goes down |
+| Weak Kill | Node 2 (lowest-weight follower) | Resilience when the slowest follower goes down |
+| Random Kill | Node 1 or 2 (random) | Resilience under unpredictable failure |
+
+Each scenario runs **12 rounds** of 3 concurrent POST requests. The target node is killed at **round 5**; rounds 6–12 observe recovery performance. Metrics recorded per round: TPS (writes/sec) and average latency (ms).
+
+Test results are stored in **[`failure_test_results.csv`](failure_test_results.csv)**.
+
+### Visual Test Page (Browser)
+
+A browser-based test page is served by the gateway. With the cluster running:
+
+```
+http://localhost:8080/test
+```
+
+Click **▶ Run All Tests** to run all tests and see live pass/fail results.
 
 ## References
 

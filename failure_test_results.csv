@@ -1,0 +1,23 @@
+Cabinet KV Store - Performance under Failures
+n=3,t=1,12 rounds per scenario,3 concurrent ops per round,Kill at round 5
+
+Per-Round Data
+Round,Event,Strong Kill TPS,Strong Kill Latency (ms),Weak Kill TPS,Weak Kill Latency (ms),Random Kill (Node 1) TPS,Random Kill (Node 1) Latency (ms)
+1,Normal,3.3,544.7,2.3,874.3,2.6,760.7
+2,Normal,3.2,552.3,3.3,533.3,3.2,570.0
+3,Normal,2.9,582.0,2.8,632.3,2.9,619.7
+4,Normal,3.0,607.0,3.1,601.0,3.1,593.7
+5,KILL,3.3,547.7,3.1,570.0,2.8,626.7
+6,Post-Kill,2.8,597.7,2.8,642.7,2.7,711.3
+7,Post-Kill,2.3,811.7,1.6,896.0,2.7,714.0
+8,Post-Kill,2.7,651.3,2.7,671.0,2.3,795.0
+9,Post-Kill,2.1,947.7,2.3,805.0,1.8,1070.0
+10,Post-Kill,2.0,976.7,2.8,648.0,2.5,821.0
+11,Post-Kill,3.1,600.7,2.3,850.3,3.3,535.0
+12,Post-Kill,3.3,541.0,2.4,755.7,1.3,1451.0
+
+Summary
+Scenario,Killed Node,Avg TPS Before Kill,Avg TPS After Kill,TPS Change (%),Avg Latency Before Kill (ms),Avg Latency After Kill (ms),Success Rate
+Strong Kill,Node 1 (highest-weight follower),3.1,2.6,-16.1,571.5,732.4,100.0
+Weak Kill,Node 2 (lowest-weight follower),2.9,2.4,-17.2,660.2,752.7,100.0
+Random Kill,Node 1 (randomly chosen),2.9,2.4,-17.2,636.0,871.0,100.0
