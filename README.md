@@ -148,11 +148,27 @@ Expected output:
 =====================================================================
 ```
 
-### Read Performance Test (Node.js)
+### Scability Test (Node.js)
 
 Runs 100 GET requests to `/customers` and reports average response time.
 
-**Start the cluster first** (see [Running a Cluster](#running-a-cluster)), then run:
+Using the helper scripts:
+
+```bash
+# One-time setup (WSL/Git Bash)
+chmod +x start_cluster.sh stop_cluster.sh
+
+# Start cluster with n nodes (default tolerance)
+./start_cluster.sh 3
+
+# Run scalability read test
+node test_scability_test.js
+
+# Stop all node processes
+./stop_cluster.sh
+```
+
+Or if you start nodes manually, run:
 
 ```bash
 node test_scability_test.js
@@ -181,16 +197,6 @@ Failed: 0
 Average response time: 2.3456ms
 ============================================================
 ```
-
-### Visual Test Page (Browser)
-
-A browser-based test page is served by the gateway. With the cluster running:
-
-```
-http://localhost:8080/test
-```
-
-Click **▶ Run All Tests** to run all tests and see live pass/fail results.
 
 ## References
 
