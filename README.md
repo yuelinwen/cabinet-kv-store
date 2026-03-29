@@ -47,13 +47,13 @@ Requires MongoDB running locally (or Atlas URI configured in `server/database/`)
 
 ```bash
 # Terminal 1 — Node 1 (follower)
-cd server && go run . -id 1 -n 3
+cd server && go run . -id=1 -n=3
 
 # Terminal 2 — Node 2 (follower)
-cd server && go run . -id 2 -n 3
+cd server && go run . -id=2 -n=3
 
 # Terminal 3 — Node 0 (initial leader + gateway)
-cd server && go run . -id 0 -n 3 -gateway
+cd server && go run . -id=0 -n=3 -gateway
 ```
 
 ### Flags
