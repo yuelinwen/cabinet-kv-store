@@ -52,17 +52,9 @@ func ViewAllCustomers() {
 	fmt.Printf("%-25s | %-20s | %-10s\n", "ID", "Name", "Balance")
 	fmt.Println("------------------------------------------------------------------")
 
-	limit := 10
-	if len(customers) < 10 {
-		limit = len(customers)
-	}
-
-	for i := 0; i < limit; i++ {
+	for i := 0; i < len(customers); i++ {
 		c := customers[i]
 		fmt.Printf("%-25s | %-20s | $%.2f\n", c.ID, c.Name, c.AccountBalance)
-	}
-	if len(customers) > 10 {
-		fmt.Printf("... (Showing top 10 results. Total users: %d)\n", len(customers))
 	}
 }
 
